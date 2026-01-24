@@ -1,0 +1,26 @@
+[project]
+name = "council"
+version = "0.1.0"
+description = "Multi-agent discussion system for reaching consensus through structured debate"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pocketflow>=0.0.1",
+    "openai>=1.14.0",
+    "pyyaml>=6.0",
+]
+
+keywords = ["ai", "agents", "agentic"]
+license = "MIT"
+
+[project.urls]
+Homepage = "https://github.com/dubs3c/council"
+Repository = "https://github.com/dubs3c/council.git"
+
+[project.scripts]
+council = "council:main.main"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.10",
+]

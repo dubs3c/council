@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.ruff_cache
+
+# Virtual environments
+.venv
+
+# files
+council_report*.md
+.env
+council-reports/
+
+# macOS
+.DS_Store
