@@ -26,8 +26,8 @@ The Council orchestrates a structured debate between multiple AI agents, each wi
    - Identifies risks, edge cases, and failure modes
    - Temperature: 0.5 (more focused)
 
-3. **The Pragmatist** - Implementation Realist
-   - Focuses on feasibility, complexity, and trade-offs
+3. **The Application Security Specialist** - Implementation Realist
+   - Focuses on Exploitability, vulnerabilities, mitigation, risk, threat model
    - Temperature: 0.6 (balanced)
 
 ### Discussion Flow
@@ -49,9 +49,6 @@ The Council orchestrates a structured debate between multiple AI agents, each wi
 ```bash
 # Using uv (recommended)
 uv sync
-
-# Or using pip
-pip install -r requirements.txt
 ```
 
 ### Configure API Provider
@@ -59,34 +56,30 @@ pip install -r requirements.txt
 The Council supports any OpenAI-compatible API. Set the appropriate environment variable:
 
 ```bash
-# OpenAI
-export OPENAI_API_KEY="your-api-key"
+# XAI
+export XAI_API_KEY="your-api-key"
 
-# Anthropic (via proxy or compatible endpoint)
-export ANTHROPIC_API_KEY="your-api-key"
-
-# Other providers
-export TOGETHER_API_KEY="your-api-key"
-export GROQ_API_KEY="your-api-key"
+# Google
+export GOOGLE_API_KEY="your-api-key"
 ```
 
 ### Basic Usage
 
 ```bash
 # Simple question (uses OpenAI by default)
-.venv/bin/python main.py --prompt "What are the pros and cons of microservices architecture?"
+council --prompt "What are the pros and cons of microservices architecture?"
 
 # Analyze a file
-.venv/bin/python main.py --prompt "Review this architecture for potential issues" --file ./arch.md
+council --prompt "Review this architecture for potential issues" --file ./arch.md
 
 # Watch the discussion live
-.venv/bin/python main.py --prompt "Evaluate this API design" --file ./api.py --show-stream
+council --prompt "Evaluate this API design" --file ./api.py --show-stream
 ```
 
 ### Full Options
 
 ```bash
-python main.py \
+council \
   --prompt "Review this architecture" \
   --file ./arch.md \
   --personas ./my_personas.yaml \
@@ -112,9 +105,9 @@ Each agent can use a different LLM provider. Configure providers in your persona
 
 ```yaml
 default_provider:
-  api_key: "$OPENAI_API_KEY"      # Environment variable reference
-  base_url: "https://api.openai.com/v1"
-  model: "gpt-4o"
+  api_key: "$GOOGLE_API_KEY"
+  base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+  model: "gemini-3-flash-preview"
 
 personas:
   - name: "The Architect"
@@ -210,7 +203,7 @@ personas:
 Then use it:
 
 ```bash
-python main.py --prompt "Review this login flow" --file ./auth.py --personas ./security_ux.yaml
+council --prompt "Review this login flow" --file ./auth.py --personas ./security_ux.yaml
 ```
 
 ## Output
@@ -229,7 +222,7 @@ Reports are saved with unique timestamps: `council_report_20260102_143052.md`
 ## Example Session
 
 ```bash
-$ python main.py --prompt "Should we use a monorepo or polyrepo for our microservices?" --show-stream
+$ council --prompt "Should we use a monorepo or polyrepo for our microservices?" --show-stream
 
 ============================================================
 THE COUNCIL
@@ -272,10 +265,12 @@ Full report saved to: ./council_report_20260102_143052.md
 ============================================================
 ```
 
+See full example [here](docs/council_report_example.md).
+
 ## Project Structure
 
 ```
-/
+/src
 ├── main.py                 # CLI entry point
 ├── flow.py                 # Flow orchestration
 ├── models.py               # Data structures
@@ -298,5 +293,4 @@ Full report saved to: ./council_report_20260102_143052.md
 - Dependencies: `pocketflow`, `openai`, `pyyaml`
 
 ## License
-
 MIT
