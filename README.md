@@ -163,12 +163,14 @@ Any OpenAI-compatible API works. Common providers:
 
 | Provider | Base URL | Notes |
 |----------|----------|-------|
-| OpenAI | `https://api.openai.com/v1` | Default |
-| Anthropic | `https://api.anthropic.com/v1` | Via compatible proxy |
+| XAI | `https://api.x.ai/v1` | Default |
+| Google | `https://generativelanguage.googleapis.com/v1beta/openai/` | Default |
+| OpenAI | `https://api.openai.com/v1` |  |
+| Anthropic | `https://api.anthropic.com/v1` | |
 | Together AI | `https://api.together.xyz/v1` | |
 | Groq | `https://api.groq.com/openai/v1` | Fast inference |
 | Ollama | `http://localhost:11434/v1` | Local models |
-| Azure OpenAI | `https://{resource}.openai.azure.com/...` | Enterprise |
+| Azure OpenAI | `https://{resource}.openai.azure.com/...` |  |
 | OpenRouter | `https://openrouter.ai/api/v1` | Multi-provider |
 
 ## Custom Personas
