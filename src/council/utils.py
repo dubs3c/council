@@ -7,8 +7,6 @@ Azure OpenAI, Together AI, Groq, etc.) via configurable base_url and api_key.
 import json
 from typing import TYPE_CHECKING, Optional
 
-from openai import OpenAI
-
 if TYPE_CHECKING:
     from council.models import ProviderConfig
 
@@ -33,6 +31,7 @@ def call_llm(
     """
     # Import here to avoid circular imports
     from council.models import ProviderConfig
+    from openai import OpenAI
 
     if provider is None:
         provider = ProviderConfig()
