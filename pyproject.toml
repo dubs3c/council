@@ -8,6 +8,7 @@ dependencies = [
     "pocketflow>=0.0.1",
     "openai>=1.14.0",
     "pyyaml>=6.0",
+    "rich>=15.0.0",
 ]
 
 keywords = ["ai", "agents", "agentic"]
@@ -18,7 +19,7 @@ Homepage = "https://github.com/dubs3c/council"
 Repository = "https://github.com/dubs3c/council.git"
 
 [project.scripts]
-council = "council:main.main"
+council = "council.main:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
@@ -26,6 +27,7 @@ build-backend = "setuptools.build_meta"
 
 [dependency-groups]
 dev = [
+    "pytest>=9.0.3",
     "ruff>=0.14.10",
 ]
 
