@@ -20,7 +20,19 @@ Repository = "https://github.com/dubs3c/council.git"
 [project.scripts]
 council = "council:main.main"
 
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [dependency-groups]
 dev = [
     "ruff>=0.14.10",
 ]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = ["--import-mode=importlib"]
