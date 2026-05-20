@@ -14,6 +14,7 @@ from council.models import (
     DebateMessage,
     Persona,
     Proposal,
+    ProposalRevision,
 )
 from council.utils import call_llm, parse_json_response
 
@@ -72,8 +73,12 @@ class DebateNode(BatchNode):
             latest[p.agent] = p
 
         for msg in debate_messages:
-            if msg.action == DebateAction.REVISE and msg.updated_proposal:
-                latest[msg.agent] = msg.updated_proposal
+            if msg.action == DebateAction.REVISE and msg.proposal_revision:
+                prior = latest.get(msg.agent)
+                if prior:
+                    latest[msg.agent] = self._apply_revision(
+                        prior, msg.proposal_revision
+                    )
 
         for agent, proposal in latest.items():
             lines.append(proposal.to_markdown())
@@ -104,11 +109,28 @@ class DebateNode(BatchNode):
             if (
                 msg.agent == agent_name
                 and msg.action == DebateAction.REVISE
-                and msg.updated_proposal
+                and msg.proposal_revision
             ):
-                latest = msg.updated_proposal
+                if latest:
+                    latest = self._apply_revision(latest, msg.proposal_revision)
 
         return latest
+
+    def _apply_revision(
+        self, base: Proposal, revision: ProposalRevision
+    ) -> Proposal:
+        """Apply a partial proposal revision to a base proposal."""
+        return Proposal(
+            agent=base.agent,
+            summary=revision.summary if revision.summary is not None else base.summary,
+            analysis=revision.analysis if revision.analysis is not None else base.analysis,
+            recommendations=(
+                revision.recommendations
+                if revision.recommendations is not None
+                else base.recommendations
+            ),
+            turn=base.turn,
+        )
 
     def exec(self, prep_res):
         """Generate debate response for a single agent."""
@@ -147,10 +169,10 @@ Return your response as JSON with this structure:
   "target": "The Architect",
   "reasoning": "Explain your thinking. Why are you taking this action?",
   "concern": "Only if action is concern - describe the unaddressed issue",
-  "updated_proposal": {{
-    "summary": "Your revised summary",
-    "analysis": [{{"point": "Observation", "reasoning": "Why it matters"}}],
-    "recommendations": ["Recommendation 1", "Recommendation 2"]
+  "proposal_revision": {{
+    "summary": "Optional: revised summary",
+    "analysis": [{{"point": "Optional: replacement analysis point", "reasoning": "Why it matters"}}],
+    "recommendations": ["Optional: replacement recommendation"]
   }}
 }}
 
@@ -158,7 +180,7 @@ Notes:
 - action: "revise", "agree", or "concern"
 - target: Required only if action is "agree" - which agent you agree with
 - concern: Required only if action is "concern"
-- updated_proposal: Required only if action is "revise"
+- proposal_revision: Required only if action is "revise". Include ONLY fields you changed.
 
 Be constructive. The goal is to reach consensus, not to win."""
 
@@ -197,26 +219,35 @@ Be constructive. The goal is to reach consensus, not to win."""
                 raise ValueError("CONCERN action requires 'concern' field")
 
         elif action == DebateAction.REVISE:
-            updated = parsed.get("updated_proposal", {})
-            if not updated:
+            updated = parsed.get("proposal_revision", {})
+            if not updated or not isinstance(updated, dict):
                 raise ValueError(
-                    "REVISE action requires 'updated_proposal' field"
+                    "REVISE action requires 'proposal_revision' field"
                 )
 
-            analysis_points = []
-            for item in updated.get("analysis", []):
-                analysis_points.append(
-                    AnalysisPoint(
-                        point=item["point"], reasoning=item["reasoning"]
+            analysis_update = None
+            if "analysis" in updated:
+                analysis_points = []
+                for item in updated.get("analysis", []):
+                    analysis_points.append(
+                        AnalysisPoint(
+                            point=item["point"], reasoning=item["reasoning"]
+                        )
                     )
-                )
+                analysis_update = analysis_points
 
-            message.updated_proposal = Proposal(
-                agent=persona.name,
-                summary=updated.get("summary", "").strip(),
-                analysis=analysis_points,
-                recommendations=updated.get("recommendations", []),
-                turn=current_turn,
+            message.proposal_revision = ProposalRevision(
+                summary=(
+                    updated.get("summary", "").strip()
+                    if "summary" in updated
+                    else None
+                ),
+                analysis=analysis_update,
+                recommendations=(
+                    updated.get("recommendations", [])
+                    if "recommendations" in updated
+                    else None
+                ),
             )
 
         return {
