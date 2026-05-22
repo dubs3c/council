@@ -31,20 +31,33 @@ def call_llm(
     """
     # Import here to avoid circular imports
     from council.models import ProviderConfig
-    from openai import OpenAI
+    from openai import BadRequestError, OpenAI
 
     if provider is None:
         provider = ProviderConfig()
 
     client = OpenAI(api_key=provider.get_api_key(), base_url=provider.base_url)
 
-    response = client.chat.completions.create(
-        model=provider.model,
-        max_tokens=10000,
-        temperature=temperature,
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-    )
+    request_kwargs = {
+        "model": provider.model,
+        "temperature": temperature,
+        "messages": [{"role": "user", "content": prompt}],
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        response = client.chat.completions.create(
+            **request_kwargs,
+            max_completion_tokens=10000,
+        )
+    except BadRequestError as exc:
+        if "max_completion_tokens" not in str(exc):
+            raise
+
+        response = client.chat.completions.create(
+            **request_kwargs,
+            max_tokens=10000,
+        )
 
     return response.choices[0].message.content or ""
 
