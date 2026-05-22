@@ -9,7 +9,9 @@ from council.console import (
     print_error,
     print_final_consensus,
 )
+from council.context import get_current_proposals
 from council.models import (
+    AgentDiscussionSummary,
     ConcernResolution,
     ConsensusPoint,
     ConsensusReport,
@@ -46,6 +48,8 @@ class ConsensusNode(Node):
             "file_path": shared.get("file_path"),
             "proposals": shared["proposals"],
             "debate_messages": shared.get("debate_messages", []),
+            "agent_summaries": shared.get("agent_summaries"),
+            "agreement_map": shared.get("agreement_map"),
             "personas": personas,
             "show_stream": shared["config"]["show_stream"],
             "moderator_provider": moderator_provider,
@@ -56,12 +60,22 @@ class ConsensusNode(Node):
         prompt = prep_res["prompt"]
         proposals = prep_res["proposals"]
         debate_messages = prep_res["debate_messages"]
+        agent_summaries = prep_res["agent_summaries"]
+        agreement_map = prep_res["agreement_map"]
         personas = prep_res["personas"]
         show_stream = prep_res["show_stream"]
         moderator_provider = prep_res["moderator_provider"]
 
-        # Format discussion for moderator
-        discussion = self._format_discussion(proposals, debate_messages)
+        if agent_summaries:
+            current_proposals = get_current_proposals(proposals, debate_messages)
+            discussion = self._format_summary_context(
+                current_proposals,
+                agent_summaries,
+                agreement_map,
+            )
+        else:
+            # Explicit fallback for flows/tests that have no summary stage.
+            discussion = self._format_discussion(proposals, debate_messages)
 
         if show_stream:
             print_consensus_start()
@@ -111,6 +125,64 @@ class ConsensusNode(Node):
 
         return "\n".join(lines)
 
+    def _format_summary_context(
+        self,
+        current_proposals: dict[str, Proposal],
+        agent_summaries: list[AgentDiscussionSummary],
+        agreement_map: dict | None,
+    ) -> str:
+        """Format structured consensus context without blending agent views."""
+        lines = ["## Current Proposals By Agent", ""]
+
+        for agent, proposal in current_proposals.items():
+            lines.append(f"### {agent}")
+            lines.append("")
+            lines.append(proposal.to_markdown())
+            lines.append("")
+
+        lines.append("## Independent Agent Summaries")
+        lines.append("")
+        for summary in agent_summaries:
+            lines.append(f"### {summary.agent}")
+            lines.append("")
+            lines.append(f"**Initial Position:** {summary.initial_position}")
+            lines.append(f"**Current Position:** {summary.current_position}")
+            lines.append(f"**Final Stance:** {summary.final_stance}")
+            lines.append("")
+            lines.append("**Revision History:**")
+            lines.extend(self._format_list(summary.revision_history))
+            lines.append("")
+            lines.append("**Concerns Raised:**")
+            lines.extend(self._format_list(summary.concerns_raised))
+            lines.append("")
+            lines.append("**Agreements:**")
+            lines.extend(self._format_list(summary.agreements))
+            lines.append("")
+
+        if agreement_map:
+            lines.append("## Agreement Map")
+            lines.append("")
+            for agent, target in agreement_map.items():
+                lines.append(f"- {agent}: {target}")
+            lines.append("")
+
+        lines.append("## Unresolved Concerns And Dissent")
+        lines.append("")
+        for summary in agent_summaries:
+            lines.append(f"### {summary.agent}")
+            lines.append(f"Final stance: {summary.final_stance}")
+            lines.append("Unresolved concerns:")
+            lines.extend(self._format_list(summary.unresolved_concerns))
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def _format_list(self, items: list[str]) -> list[str]:
+        """Format a simple markdown list with an explicit empty state."""
+        if not items:
+            return ["- [None]"]
+        return [f"- {item}" for item in items]
+
     def _generate_draft(
         self,
         prompt: str,
@@ -127,7 +199,7 @@ class ConsensusNode(Node):
 
 {prompt}
 
-## Discussion
+## Discussion Context
 
 {discussion}
 
@@ -162,56 +234,51 @@ Notes:
 - dissenting_views: Only include if genuine disagreement remains
 
 Be fair and balanced. Accurately represent each agent's views.
+Do not treat an idea as consensus unless the independent summaries or agreement map show support from the relevant agents.
+Preserve dissent explicitly when an agent's final stance remains conditional or opposed.
+Use current proposals as the final state, and use revision history to explain how the council got there.
 Available agents: {", ".join(agent_names)}"""
 
         response = call_llm(
             llm_prompt, temperature=0.3, provider=moderator_provider
         )
 
-        # Parse JSON
         parsed = parse_json_response(response)
+        return self._report_from_parsed(parsed)
 
-        # Build ConsensusReport
-        strengths = []
-        for s in parsed.get("strengths", []):
-            strengths.append(
-                ConsensusPoint(
-                    point=s["point"], supporters=s.get("supporters", [])
-                )
+    def _report_from_parsed(self, parsed: dict) -> ConsensusReport:
+        """Build a consensus report from parsed LLM JSON."""
+        strengths = [
+            ConsensusPoint(point=s["point"], supporters=s.get("supporters", []))
+            for s in parsed.get("strengths", [])
+        ]
+        concerns = [
+            ConcernResolution(
+                concern=c["concern"],
+                raised_by=c["raised_by"],
+                resolution=c["resolution"],
             )
-
-        concerns = []
-        for c in parsed.get("concerns", []):
-            concerns.append(
-                ConcernResolution(
-                    concern=c["concern"],
-                    raised_by=c["raised_by"],
-                    resolution=c["resolution"],
-                )
+            for c in parsed.get("concerns", [])
+        ]
+        recommendations = [
+            Recommendation(
+                priority=r.get("priority", "medium"),
+                action=r["action"],
+                rationale=r["rationale"],
             )
-
-        recommendations = []
-        for r in parsed.get("recommendations", []):
-            recommendations.append(
-                Recommendation(
-                    priority=r.get("priority", "medium"),
-                    action=r["action"],
-                    rationale=r["rationale"],
-                )
-            )
-
-        dissenting = []
-        for d in parsed.get("dissenting_views", []):
-            dissenting.append(
-                DissentingView(agent=d["agent"], position=d["position"])
-            )
+            for r in parsed.get("recommendations", [])
+        ]
+        dissenting_views = [
+            DissentingView(agent=d["agent"], position=d["position"])
+            for d in parsed.get("dissenting_views", [])
+        ]
 
         return ConsensusReport(
             summary=parsed.get("summary", "").strip(),
             strengths=strengths,
             concerns=concerns,
             recommendations=recommendations,
-            dissenting_views=dissenting,
+            dissenting_views=dissenting_views,
         )
 
     def _get_agent_feedback(
@@ -328,42 +395,7 @@ Return your response as JSON with the same structure:
 
         try:
             parsed = parse_json_response(response)
-
-            # Rebuild report
-            strengths = [
-                ConsensusPoint(
-                    point=s["point"], supporters=s.get("supporters", [])
-                )
-                for s in parsed.get("strengths", [])
-            ]
-            concerns = [
-                ConcernResolution(
-                    concern=c["concern"],
-                    raised_by=c["raised_by"],
-                    resolution=c["resolution"],
-                )
-                for c in parsed.get("concerns", [])
-            ]
-            recommendations = [
-                Recommendation(
-                    priority=r.get("priority", "medium"),
-                    action=r["action"],
-                    rationale=r["rationale"],
-                )
-                for r in parsed.get("recommendations", [])
-            ]
-            dissenting = [
-                DissentingView(agent=d["agent"], position=d["position"])
-                for d in parsed.get("dissenting_views", [])
-            ]
-
-            return ConsensusReport(
-                summary=parsed.get("summary", "").strip(),
-                strengths=strengths,
-                concerns=concerns,
-                recommendations=recommendations,
-                dissenting_views=dissenting,
-            )
+            return self._report_from_parsed(parsed)
         except Exception:
             # Return original draft on failure
             return draft

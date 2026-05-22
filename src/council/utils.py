@@ -7,14 +7,24 @@ Azure OpenAI, Together AI, Groq, etc.) via configurable base_url and api_key.
 import json
 from typing import TYPE_CHECKING, Optional
 
-from openai import OpenAI
+from council.prompts import Prompt
 
 if TYPE_CHECKING:
     from council.models import ProviderConfig
 
 
+SUPPORTED_PROMPT_CACHE_STRATEGIES = {"none", "openai_compatible_auto"}
+
+
+def render_prompt(prompt: str | Prompt) -> str:
+    """Render a prompt object or return plain prompt text unchanged."""
+    if isinstance(prompt, Prompt):
+        return prompt.to_text()
+    return prompt
+
+
 def call_llm(
-    prompt: str,
+    prompt: str | Prompt,
     temperature: float = 0.7,
     provider: Optional["ProviderConfig"] = None,
 ) -> str:
@@ -33,19 +43,39 @@ def call_llm(
     """
     # Import here to avoid circular imports
     from council.models import ProviderConfig
+    from openai import BadRequestError, OpenAI
 
     if provider is None:
         provider = ProviderConfig()
+    if provider.prompt_cache_strategy not in SUPPORTED_PROMPT_CACHE_STRATEGIES:
+        raise ValueError(
+            "Unsupported prompt cache strategy: "
+            f"{provider.prompt_cache_strategy}"
+        )
 
     client = OpenAI(api_key=provider.get_api_key(), base_url=provider.base_url)
+    prompt_text = render_prompt(prompt)
 
-    response = client.chat.completions.create(
-        model=provider.model,
-        max_tokens=10000,
-        temperature=temperature,
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-    )
+    request_kwargs = {
+        "model": provider.model,
+        "temperature": temperature,
+        "messages": [{"role": "user", "content": prompt_text}],
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        response = client.chat.completions.create(
+            **request_kwargs,
+            max_completion_tokens=10000,
+        )
+    except BadRequestError as exc:
+        if "max_completion_tokens" not in str(exc):
+            raise
+
+        response = client.chat.completions.create(
+            **request_kwargs,
+            max_tokens=10000,
+        )
 
     return response.choices[0].message.content or ""
 

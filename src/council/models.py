@@ -32,11 +32,15 @@ class ProviderConfig:
         api_key: API key or env var reference (e.g., "$OPENAI_API_KEY")
         base_url: Base URL for OpenAI-compatible API
         model: Model identifier (e.g., "gpt-4o", "claude-3-opus-20240229")
+        prompt_cache: Whether prompt caching is enabled when safely supported
+        prompt_cache_strategy: Provider-safe prompt cache strategy
     """
 
     api_key: str = "$OPENAI_API_KEY"
     base_url: str = "https://api.openai.com/v1"
     model: str = "gpt-4o"
+    prompt_cache: bool = False
+    prompt_cache_strategy: str = "none"
 
     def get_api_key(self) -> str:
         """Resolve API key, supporting environment variable references."""
@@ -121,6 +125,15 @@ class Proposal:
 
 
 @dataclass
+class ProposalRevision:
+    """A partial revision to an agent's existing proposal."""
+
+    summary: Optional[str] = None
+    analysis: Optional[List[AnalysisPoint]] = None
+    recommendations: Optional[List[str]] = None
+
+
+@dataclass
 class DebateMessage:
     """A message in the debate phase."""
 
@@ -131,7 +144,7 @@ class DebateMessage:
     target: Optional[str] = (
         None  # For AGREE action - which agent they agree with
     )
-    updated_proposal: Optional[Proposal] = None  # For REVISE action
+    proposal_revision: Optional[ProposalRevision] = None  # For REVISE action
     concern: Optional[str] = None  # For CONCERN action
 
     def to_markdown(self) -> str:
@@ -145,12 +158,36 @@ class DebateMessage:
 
         lines.append(f"> {self.reasoning}")
 
-        if self.updated_proposal:
+        if self.proposal_revision:
             lines.append("")
-            lines.append("Updated proposal:")
-            lines.append(self.updated_proposal.to_markdown())
+            lines.append("Proposal revision:")
+            if self.proposal_revision.summary is not None:
+                lines.append(f"- Summary: {self.proposal_revision.summary}")
+            if self.proposal_revision.analysis is not None:
+                lines.append("- Analysis updates:")
+                for point in self.proposal_revision.analysis:
+                    lines.append(f"  - {point.point}")
+                    lines.append(f"    - *Reasoning:* {point.reasoning}")
+            if self.proposal_revision.recommendations is not None:
+                lines.append("- Recommendations updates:")
+                for rec in self.proposal_revision.recommendations:
+                    lines.append(f"  - {rec}")
 
         return "\n".join(lines)
+
+
+@dataclass
+class AgentDiscussionSummary:
+    """Structured summary of one agent's discussion history."""
+
+    agent: str
+    initial_position: str
+    revision_history: List[str]
+    current_position: str
+    concerns_raised: List[str]
+    agreements: List[str]
+    unresolved_concerns: List[str]
+    final_stance: str
 
 
 @dataclass
@@ -269,16 +306,9 @@ class DiscussionState:
 
     def get_current_proposals(self) -> dict:
         """Get the most recent proposal from each agent."""
-        latest = {}
-        for proposal in self.proposals:
-            latest[proposal.agent] = proposal
+        from council.context import get_current_proposals
 
-        # Update with revisions from debate
-        for msg in self.debate_messages:
-            if msg.action == DebateAction.REVISE and msg.updated_proposal:
-                latest[msg.agent] = msg.updated_proposal
-
-        return latest
+        return get_current_proposals(self.proposals, self.debate_messages)
 
     def get_agreements(self) -> dict:
         """Get which agents agree with which proposals."""

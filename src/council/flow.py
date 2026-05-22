@@ -2,6 +2,7 @@
 
 from pocketflow import Flow
 
+from council.nodes.agent_summary_node import AgentSummaryNode
 from council.nodes.consensus_node import ConsensusNode
 from council.nodes.debate_node import DebateNode
 from council.nodes.input_node import InputNode
@@ -32,7 +33,10 @@ def create_council_flow() -> Flow:
         ├── "max_turns" ────────┤
         │                       │
         ▼                       ▼
-    ConsensusNode ◀─────────────┘
+    AgentSummaryNode ◀──────────┘
+        │
+        ▼
+    ConsensusNode
         │
         ▼
     OutputNode
@@ -47,6 +51,7 @@ def create_council_flow() -> Flow:
     input_node = InputNode()
     proposal_node = ProposalNode(max_retries=2, wait=5)
     debate_node = DebateNode(max_retries=2, wait=5)
+    agent_summary_node = AgentSummaryNode(max_retries=2, wait=5)
     consensus_node = ConsensusNode(max_retries=2, wait=5)
     output_node = OutputNode()
 
@@ -60,10 +65,13 @@ def create_council_flow() -> Flow:
 
     # DebateNode transitions
     debate_node - "continue" >> debate_node  # Loop back for more debate
-    debate_node - "consensus_ready" >> consensus_node  # Early consensus
+    debate_node - "consensus_ready" >> agent_summary_node  # Early consensus
     (
-        debate_node - "max_turns" >> consensus_node
+        debate_node - "max_turns" >> agent_summary_node
     )  # Force consensus after max turns
+
+    # AgentSummaryNode -> ConsensusNode
+    agent_summary_node - "default" >> consensus_node
 
     # ConsensusNode -> OutputNode
     consensus_node - "default" >> output_node

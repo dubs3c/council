@@ -8,14 +8,26 @@ from council.console import (
     print_special_event,
     print_warning,
 )
+from council.context import (
+    build_agreement_map,
+    get_current_proposals,
+    split_debate_messages_for_compaction,
+    summarize_debate_messages_by_agent,
+)
 from council.models import (
     AnalysisPoint,
     DebateAction,
     DebateMessage,
     Persona,
     Proposal,
+    ProposalRevision,
 )
 from council.utils import call_llm, parse_json_response
+
+
+CONTEXT_COMPACTION_ENABLED = True
+COMPACT_AFTER_TURNS = 8
+RECENT_TURNS_TO_KEEP = 3
 
 
 class DebateNode(BatchNode):
@@ -38,9 +50,24 @@ class DebateNode(BatchNode):
         proposals = shared["proposals"]
         debate_messages = shared.get("debate_messages", [])
         current_turn = shared.get("current_turn", 0) + 1
+        current_proposals = get_current_proposals(proposals, debate_messages)
+        config = shared["config"]
+        compacted_context = self._prepare_compacted_context(
+            shared, debate_messages, current_turn
+        )
+        prompt_messages = (
+            compacted_context["recent_messages"]
+            if compacted_context is not None
+            else debate_messages
+        )
 
-        # Format all current proposals for context
-        proposals_context = self._format_proposals(proposals, debate_messages)
+        # Format discussion context for the prompt without mutating the transcript.
+        proposals_context = self._format_discussion_context(
+            proposals,
+            current_proposals,
+            compacted_context,
+            prompt_messages,
+        )
 
         # Create input for each persona
         inputs = []
@@ -51,64 +78,99 @@ class DebateNode(BatchNode):
                     "proposals_context": proposals_context,
                     "current_turn": current_turn,
                     "prompt": shared["prompt"],
-                    "show_stream": shared["config"]["show_stream"],
-                    "own_proposal": self._get_latest_proposal(
-                        persona.name, proposals, debate_messages
-                    ),
+                    "show_stream": config["show_stream"],
+                    "own_proposal": current_proposals.get(persona.name),
                 }
             )
 
         return inputs
 
-    def _format_proposals(
-        self, proposals: list[Proposal], debate_messages: list[DebateMessage]
+    def _prepare_compacted_context(
+        self,
+        shared: dict,
+        debate_messages: list[DebateMessage],
+        current_turn: int,
+    ) -> dict | None:
+        """Derive compacted prompt context while preserving full messages."""
+        config = shared["config"]
+        if not config.get("context_compaction_enabled", CONTEXT_COMPACTION_ENABLED):
+            return None
+
+        compact_after_turns = config.get("compact_after_turns", COMPACT_AFTER_TURNS)
+        if current_turn <= compact_after_turns:
+            return None
+
+        recent_turns_to_keep = config.get(
+            "recent_turns_to_keep", RECENT_TURNS_TO_KEEP
+        )
+        compacted_messages, recent_messages, through_turn = (
+            split_debate_messages_for_compaction(
+                debate_messages, current_turn, recent_turns_to_keep
+            )
+        )
+        if through_turn is None:
+            return None
+
+        compacted_context = {
+            "through_turn": through_turn,
+            "recent_turns_to_keep": recent_turns_to_keep,
+            "summary_by_agent": summarize_debate_messages_by_agent(
+                compacted_messages
+            ),
+            "recent_messages": recent_messages,
+        }
+        shared["compacted_context"] = {
+            key: value
+            for key, value in compacted_context.items()
+            if key != "recent_messages"
+        }
+        return compacted_context
+
+    def _format_discussion_context(
+        self,
+        initial_proposals: list[Proposal],
+        current_proposals: dict[str, Proposal],
+        compacted_context: dict | None,
+        debate_messages: list[DebateMessage],
     ) -> str:
-        """Format current proposals and debate history for context."""
-        lines = ["## Current Proposals\n"]
+        """Format proposals and debate context for the debate prompt."""
+        lines = ["## Initial Proposals\n"]
 
-        # Get latest proposal for each agent
-        latest = {}
-        for p in proposals:
-            latest[p.agent] = p
-
-        for msg in debate_messages:
-            if msg.action == DebateAction.REVISE and msg.updated_proposal:
-                latest[msg.agent] = msg.updated_proposal
-
-        for agent, proposal in latest.items():
+        for proposal in initial_proposals:
             lines.append(proposal.to_markdown())
             lines.append("")
 
-        # Add debate history if any
+        lines.append("\n## Current Proposals\n")
+
+        for proposal in current_proposals.values():
+            lines.append(proposal.to_markdown())
+            lines.append("")
+
+        if compacted_context is not None:
+            lines.append("\n## Older Debate Summary By Agent\n")
+            lines.append(
+                "Compacted completed debate turns through "
+                f"turn {compacted_context['through_turn']}."
+            )
+            lines.append("")
+            for agent, summaries in compacted_context[
+                "summary_by_agent"
+            ].items():
+                lines.append(f"### {agent}")
+                for summary in summaries:
+                    lines.append(f"- {summary}")
+                lines.append("")
+
         if debate_messages:
-            lines.append("\n## Debate History\n")
+            heading = (
+                "Recent Debate" if compacted_context is not None else "Debate History"
+            )
+            lines.append(f"\n## {heading}\n")
             for msg in debate_messages:
                 lines.append(msg.to_markdown())
                 lines.append("")
 
         return "\n".join(lines)
-
-    def _get_latest_proposal(
-        self,
-        agent_name: str,
-        proposals: list[Proposal],
-        debate_messages: list[DebateMessage],
-    ) -> Proposal | None:
-        """Get the most recent proposal for an agent."""
-        latest = None
-        for p in proposals:
-            if p.agent == agent_name:
-                latest = p
-
-        for msg in debate_messages:
-            if (
-                msg.agent == agent_name
-                and msg.action == DebateAction.REVISE
-                and msg.updated_proposal
-            ):
-                latest = msg.updated_proposal
-
-        return latest
 
     def exec(self, prep_res):
         """Generate debate response for a single agent."""
@@ -147,10 +209,10 @@ Return your response as JSON with this structure:
   "target": "The Architect",
   "reasoning": "Explain your thinking. Why are you taking this action?",
   "concern": "Only if action is concern - describe the unaddressed issue",
-  "updated_proposal": {{
-    "summary": "Your revised summary",
-    "analysis": [{{"point": "Observation", "reasoning": "Why it matters"}}],
-    "recommendations": ["Recommendation 1", "Recommendation 2"]
+  "proposal_revision": {{
+    "summary": "Optional: revised summary",
+    "analysis": [{{"point": "Optional: replacement analysis point", "reasoning": "Why it matters"}}],
+    "recommendations": ["Optional: replacement recommendation"]
   }}
 }}
 
@@ -158,7 +220,12 @@ Notes:
 - action: "revise", "agree", or "concern"
 - target: Required only if action is "agree" - which agent you agree with
 - concern: Required only if action is "concern"
-- updated_proposal: Required only if action is "revise"
+- proposal_revision: Required only if action is "revise". Include ONLY fields you changed.
+- Revision semantics:
+  - Included summary replaces the prior summary.
+  - Included analysis replaces the full prior analysis list.
+  - Included recommendations replaces the full prior recommendations list.
+  - Omitted fields remain unchanged.
 
 Be constructive. The goal is to reach consensus, not to win."""
 
@@ -197,26 +264,35 @@ Be constructive. The goal is to reach consensus, not to win."""
                 raise ValueError("CONCERN action requires 'concern' field")
 
         elif action == DebateAction.REVISE:
-            updated = parsed.get("updated_proposal", {})
-            if not updated:
+            updated = parsed.get("proposal_revision", {})
+            if not updated or not isinstance(updated, dict):
                 raise ValueError(
-                    "REVISE action requires 'updated_proposal' field"
+                    "REVISE action requires 'proposal_revision' field"
                 )
 
-            analysis_points = []
-            for item in updated.get("analysis", []):
-                analysis_points.append(
-                    AnalysisPoint(
-                        point=item["point"], reasoning=item["reasoning"]
+            analysis_update = None
+            if "analysis" in updated:
+                analysis_points = []
+                for item in updated.get("analysis", []):
+                    analysis_points.append(
+                        AnalysisPoint(
+                            point=item["point"], reasoning=item["reasoning"]
+                        )
                     )
-                )
+                analysis_update = analysis_points
 
-            message.updated_proposal = Proposal(
-                agent=persona.name,
-                summary=updated.get("summary", "").strip(),
-                analysis=analysis_points,
-                recommendations=updated.get("recommendations", []),
-                turn=current_turn,
+            message.proposal_revision = ProposalRevision(
+                summary=(
+                    updated.get("summary", "").strip()
+                    if "summary" in updated
+                    else None
+                ),
+                analysis=analysis_update,
+                recommendations=(
+                    updated.get("recommendations", [])
+                    if "recommendations" in updated
+                    else None
+                ),
             )
 
         return {
@@ -264,6 +340,10 @@ Be constructive. The goal is to reach consensus, not to win."""
                 if show_stream:
                     print_debate_message(message.agent, message.to_markdown())
 
+        shared["agreement_map"] = build_agreement_map(
+            shared.get("debate_messages", [])
+        )
+
         # Check for consensus
         if self._check_consensus(shared):
             shared["consensus_reached"] = True
@@ -288,19 +368,10 @@ Be constructive. The goal is to reach consensus, not to win."""
         if not debate_messages:
             return False
 
-        # Get the most recent action from each agent
-        latest_actions = {}
-        for msg in debate_messages:
-            latest_actions[msg.agent] = msg
-
         # Count agreements
         agreements = {}
-        for agent, msg in latest_actions.items():
-            if msg.action == DebateAction.AGREE:
-                target = msg.target
-                if target not in agreements:
-                    agreements[target] = []
-                agreements[target].append(agent)
+        for agent, target in build_agreement_map(debate_messages).items():
+            agreements.setdefault(target, []).append(agent)
 
         # Check if any proposal has everyone except its author agreeing
         for target, supporters in agreements.items():
