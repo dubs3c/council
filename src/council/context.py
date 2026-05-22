@@ -49,6 +49,18 @@ def get_agent_messages(
     return [message for message in debate_messages if message.agent == agent]
 
 
+def build_agreement_map(
+    debate_messages: list[DebateMessage],
+) -> dict[str, str]:
+    """Map each agent's latest explicit agreement to its target."""
+    latest_actions = {message.agent: message for message in debate_messages}
+    return {
+        agent: message.target
+        for agent, message in latest_actions.items()
+        if message.action == DebateAction.AGREE and message.target
+    }
+
+
 def split_debate_messages_for_compaction(
     debate_messages: list[DebateMessage],
     current_turn: int,

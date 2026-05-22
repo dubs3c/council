@@ -9,6 +9,7 @@ from council.console import (
     print_warning,
 )
 from council.context import (
+    build_agreement_map,
     get_current_proposals,
     split_debate_messages_for_compaction,
     summarize_debate_messages_by_agent,
@@ -339,6 +340,10 @@ Be constructive. The goal is to reach consensus, not to win."""
                 if show_stream:
                     print_debate_message(message.agent, message.to_markdown())
 
+        shared["agreement_map"] = build_agreement_map(
+            shared.get("debate_messages", [])
+        )
+
         # Check for consensus
         if self._check_consensus(shared):
             shared["consensus_reached"] = True
@@ -363,14 +368,10 @@ Be constructive. The goal is to reach consensus, not to win."""
         if not debate_messages:
             return False
 
-        # Get the most recent action from each agent
-        latest_actions = {msg.agent: msg for msg in debate_messages}
-
         # Count agreements
         agreements = {}
-        for agent, msg in latest_actions.items():
-            if msg.action == DebateAction.AGREE:
-                agreements.setdefault(msg.target, []).append(agent)
+        for agent, target in build_agreement_map(debate_messages).items():
+            agreements.setdefault(target, []).append(agent)
 
         # Check if any proposal has everyone except its author agreeing
         for target, supporters in agreements.items():

@@ -149,3 +149,49 @@ def test_prep_compacts_prompt_context_without_mutating_debate_messages():
     assert "Turn 8: concern" in prompt_context
     assert "**A** (Turn 9)" in prompt_context
     assert "**A** (Turn 11)" in prompt_context
+
+
+def test_post_populates_agreement_map_from_latest_actions():
+    node = DebateNode()
+    shared = {
+        "personas": [_persona("A"), _persona("B"), _persona("C")],
+        "debate_messages": [
+            DebateMessage(
+                agent="B",
+                turn=1,
+                action=DebateAction.AGREE,
+                reasoning="initially agrees",
+                target="A",
+            )
+        ],
+        "current_turn": 1,
+        "config": {"max_turns": 3, "show_stream": False},
+    }
+
+    result = node.post(
+        shared,
+        prep_res=None,
+        exec_res_list=[
+            {
+                "message": DebateMessage(
+                    agent="B",
+                    turn=2,
+                    action=DebateAction.CONCERN,
+                    reasoning="withdraws agreement",
+                    concern="new risk",
+                )
+            },
+            {
+                "message": DebateMessage(
+                    agent="C",
+                    turn=2,
+                    action=DebateAction.AGREE,
+                    reasoning="supports A",
+                    target="A",
+                )
+            },
+        ],
+    )
+
+    assert result == "continue"
+    assert shared["agreement_map"] == {"C": "A"}

@@ -2,6 +2,7 @@ import pytest
 
 from council.context import (
     apply_revision,
+    build_agreement_map,
     get_agent_messages,
     get_current_proposals,
     split_debate_messages_for_compaction,
@@ -139,6 +140,34 @@ def test_get_agent_messages_returns_only_matching_agent_in_order():
     agent_messages = get_agent_messages("A", messages)
 
     assert [message.reasoning for message in agent_messages] == ["first", "second"]
+
+
+def test_build_agreement_map_uses_latest_action_per_agent():
+    messages = [
+        DebateMessage(
+            agent="B",
+            turn=1,
+            action=DebateAction.AGREE,
+            reasoning="initial agreement",
+            target="A",
+        ),
+        DebateMessage(
+            agent="C",
+            turn=1,
+            action=DebateAction.AGREE,
+            reasoning="agreement",
+            target="A",
+        ),
+        DebateMessage(
+            agent="B",
+            turn=2,
+            action=DebateAction.CONCERN,
+            reasoning="withdrawing agreement",
+            concern="new risk",
+        ),
+    ]
+
+    assert build_agreement_map(messages) == {"C": "A"}
 
 
 def test_split_debate_messages_for_compaction_uses_completed_turn_boundary():
