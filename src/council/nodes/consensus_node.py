@@ -243,50 +243,42 @@ Available agents: {", ".join(agent_names)}"""
             llm_prompt, temperature=0.3, provider=moderator_provider
         )
 
-        # Parse JSON
         parsed = parse_json_response(response)
+        return self._report_from_parsed(parsed)
 
-        # Build ConsensusReport
-        strengths = []
-        for s in parsed.get("strengths", []):
-            strengths.append(
-                ConsensusPoint(
-                    point=s["point"], supporters=s.get("supporters", [])
-                )
+    def _report_from_parsed(self, parsed: dict) -> ConsensusReport:
+        """Build a consensus report from parsed LLM JSON."""
+        strengths = [
+            ConsensusPoint(point=s["point"], supporters=s.get("supporters", []))
+            for s in parsed.get("strengths", [])
+        ]
+        concerns = [
+            ConcernResolution(
+                concern=c["concern"],
+                raised_by=c["raised_by"],
+                resolution=c["resolution"],
             )
-
-        concerns = []
-        for c in parsed.get("concerns", []):
-            concerns.append(
-                ConcernResolution(
-                    concern=c["concern"],
-                    raised_by=c["raised_by"],
-                    resolution=c["resolution"],
-                )
+            for c in parsed.get("concerns", [])
+        ]
+        recommendations = [
+            Recommendation(
+                priority=r.get("priority", "medium"),
+                action=r["action"],
+                rationale=r["rationale"],
             )
-
-        recommendations = []
-        for r in parsed.get("recommendations", []):
-            recommendations.append(
-                Recommendation(
-                    priority=r.get("priority", "medium"),
-                    action=r["action"],
-                    rationale=r["rationale"],
-                )
-            )
-
-        dissenting = []
-        for d in parsed.get("dissenting_views", []):
-            dissenting.append(
-                DissentingView(agent=d["agent"], position=d["position"])
-            )
+            for r in parsed.get("recommendations", [])
+        ]
+        dissenting_views = [
+            DissentingView(agent=d["agent"], position=d["position"])
+            for d in parsed.get("dissenting_views", [])
+        ]
 
         return ConsensusReport(
             summary=parsed.get("summary", "").strip(),
             strengths=strengths,
             concerns=concerns,
             recommendations=recommendations,
-            dissenting_views=dissenting,
+            dissenting_views=dissenting_views,
         )
 
     def _get_agent_feedback(
@@ -403,42 +395,7 @@ Return your response as JSON with the same structure:
 
         try:
             parsed = parse_json_response(response)
-
-            # Rebuild report
-            strengths = [
-                ConsensusPoint(
-                    point=s["point"], supporters=s.get("supporters", [])
-                )
-                for s in parsed.get("strengths", [])
-            ]
-            concerns = [
-                ConcernResolution(
-                    concern=c["concern"],
-                    raised_by=c["raised_by"],
-                    resolution=c["resolution"],
-                )
-                for c in parsed.get("concerns", [])
-            ]
-            recommendations = [
-                Recommendation(
-                    priority=r.get("priority", "medium"),
-                    action=r["action"],
-                    rationale=r["rationale"],
-                )
-                for r in parsed.get("recommendations", [])
-            ]
-            dissenting = [
-                DissentingView(agent=d["agent"], position=d["position"])
-                for d in parsed.get("dissenting_views", [])
-            ]
-
-            return ConsensusReport(
-                summary=parsed.get("summary", "").strip(),
-                strengths=strengths,
-                concerns=concerns,
-                recommendations=recommendations,
-                dissenting_views=dissenting,
-            )
+            return self._report_from_parsed(parsed)
         except Exception:
             # Return original draft on failure
             return draft

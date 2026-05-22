@@ -364,18 +364,13 @@ Be constructive. The goal is to reach consensus, not to win."""
             return False
 
         # Get the most recent action from each agent
-        latest_actions = {}
-        for msg in debate_messages:
-            latest_actions[msg.agent] = msg
+        latest_actions = {msg.agent: msg for msg in debate_messages}
 
         # Count agreements
         agreements = {}
         for agent, msg in latest_actions.items():
             if msg.action == DebateAction.AGREE:
-                target = msg.target
-                if target not in agreements:
-                    agreements[target] = []
-                agreements[target].append(agent)
+                agreements.setdefault(msg.target, []).append(agent)
 
         # Check if any proposal has everyone except its author agreeing
         for target, supporters in agreements.items():
