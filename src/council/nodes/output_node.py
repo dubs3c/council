@@ -6,7 +6,7 @@ from datetime import datetime
 from pocketflow import Node
 
 from council.console import print_error, print_session_complete
-from council.models import DebateMessage, Proposal
+from council.models import AgentDiscussionSummary, DebateMessage, Proposal
 
 
 class OutputNode(Node):
@@ -26,6 +26,8 @@ class OutputNode(Node):
             "personas": shared["personas"],
             "proposals": shared["proposals"],
             "debate_messages": shared.get("debate_messages", []),
+            "agent_summaries": shared.get("agent_summaries"),
+            "compacted_context": shared.get("compacted_context"),
             "final_report": shared.get("final_report"),
             "output_dir": shared["config"]["output_dir"],
             "show_stream": shared["config"]["show_stream"],
@@ -67,6 +69,25 @@ class OutputNode(Node):
         lines.append("")
         lines.append("---")
         lines.append("")
+
+        if prep_res["agent_summaries"]:
+            lines.append(
+                self._format_agent_summaries(prep_res["agent_summaries"])
+            )
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+        if prep_res["compacted_context"] is not None:
+            lines.append("## Context Compaction Note")
+            lines.append("")
+            lines.append(
+                "Compacted context was used during prompt construction. "
+                "The full discussion transcript below remains complete."
+            )
+            lines.append("")
+            lines.append("---")
+            lines.append("")
 
         # Add discussion transcript in collapsible section
         lines.append("<details>")
@@ -121,6 +142,40 @@ class OutputNode(Node):
                 lines.append("")
 
         return "\n".join(lines)
+
+    def _format_agent_summaries(
+        self, agent_summaries: list[AgentDiscussionSummary]
+    ) -> str:
+        """Format independent agent summaries without blending viewpoints."""
+        lines = ["## Independent Agent Summaries", ""]
+
+        for summary in agent_summaries:
+            lines.append(f"### {summary.agent}")
+            lines.append("")
+            lines.append(f"**Initial Position:** {summary.initial_position}")
+            lines.append(f"**Current Position:** {summary.current_position}")
+            lines.append(f"**Final Stance:** {summary.final_stance}")
+            lines.append("")
+            lines.append("**Revision History:**")
+            lines.extend(self._format_list(summary.revision_history))
+            lines.append("")
+            lines.append("**Concerns Raised:**")
+            lines.extend(self._format_list(summary.concerns_raised))
+            lines.append("")
+            lines.append("**Agreements:**")
+            lines.extend(self._format_list(summary.agreements))
+            lines.append("")
+            lines.append("**Unresolved Concerns:**")
+            lines.extend(self._format_list(summary.unresolved_concerns))
+            lines.append("")
+
+        return "\n".join(lines).rstrip()
+
+    def _format_list(self, items: list[str]) -> list[str]:
+        """Format a simple markdown list with an explicit empty state."""
+        if not items:
+            return ["- [None]"]
+        return [f"- {item}" for item in items]
 
     def exec_fallback(self, prep_res, exc):
         """Handle errors gracefully."""

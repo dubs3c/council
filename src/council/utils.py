@@ -7,12 +7,24 @@ Azure OpenAI, Together AI, Groq, etc.) via configurable base_url and api_key.
 import json
 from typing import TYPE_CHECKING, Optional
 
+from council.prompts import Prompt
+
 if TYPE_CHECKING:
     from council.models import ProviderConfig
 
 
+SUPPORTED_PROMPT_CACHE_STRATEGIES = {"none", "openai_compatible_auto"}
+
+
+def render_prompt(prompt: str | Prompt) -> str:
+    """Render a prompt object or return plain prompt text unchanged."""
+    if isinstance(prompt, Prompt):
+        return prompt.to_text()
+    return prompt
+
+
 def call_llm(
-    prompt: str,
+    prompt: str | Prompt,
     temperature: float = 0.7,
     provider: Optional["ProviderConfig"] = None,
 ) -> str:
@@ -35,13 +47,19 @@ def call_llm(
 
     if provider is None:
         provider = ProviderConfig()
+    if provider.prompt_cache_strategy not in SUPPORTED_PROMPT_CACHE_STRATEGIES:
+        raise ValueError(
+            "Unsupported prompt cache strategy: "
+            f"{provider.prompt_cache_strategy}"
+        )
 
     client = OpenAI(api_key=provider.get_api_key(), base_url=provider.base_url)
+    prompt_text = render_prompt(prompt)
 
     request_kwargs = {
         "model": provider.model,
         "temperature": temperature,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "user", "content": prompt_text}],
         "response_format": {"type": "json_object"},
     }
 

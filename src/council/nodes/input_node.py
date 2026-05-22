@@ -36,6 +36,10 @@ def load_personas(personas_path: str) -> list[Persona]:
             "base_url", "https://api.openai.com/v1"
         ),
         model=default_provider_data.get("model", "gpt-4o"),
+        prompt_cache=default_provider_data.get("prompt_cache", False),
+        prompt_cache_strategy=default_provider_data.get(
+            "prompt_cache_strategy", "none"
+        ),
     )
 
     personas = []
@@ -49,6 +53,13 @@ def load_personas(personas_path: str) -> list[Persona]:
                     "base_url", default_provider.base_url
                 ),
                 model=provider_data.get("model", default_provider.model),
+                prompt_cache=provider_data.get(
+                    "prompt_cache", default_provider.prompt_cache
+                ),
+                prompt_cache_strategy=provider_data.get(
+                    "prompt_cache_strategy",
+                    default_provider.prompt_cache_strategy,
+                ),
             )
         else:
             provider = default_provider

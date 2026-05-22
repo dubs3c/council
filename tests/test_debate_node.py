@@ -1,6 +1,7 @@
 import json
 from unittest.mock import patch
 
+from council.context import apply_revision, get_current_proposals
 from council.models import (
     AnalysisPoint,
     DebateAction,
@@ -22,7 +23,6 @@ def _persona(name: str) -> Persona:
 
 
 def test_apply_partial_revision_keeps_unchanged_fields():
-    node = DebateNode()
     base = Proposal(
         agent="A",
         summary="old summary",
@@ -31,7 +31,7 @@ def test_apply_partial_revision_keeps_unchanged_fields():
         turn=0,
     )
 
-    revised = node._apply_revision(
+    revised = apply_revision(
         base,
         ProposalRevision(summary="new summary"),
     )
@@ -42,7 +42,6 @@ def test_apply_partial_revision_keeps_unchanged_fields():
 
 
 def test_get_latest_proposal_reconstructs_from_partial_revisions():
-    node = DebateNode()
     base = Proposal(
         agent="A",
         summary="summary v1",
@@ -68,9 +67,8 @@ def test_get_latest_proposal_reconstructs_from_partial_revisions():
         ),
     ]
 
-    latest = node._get_latest_proposal("A", [base], messages)
+    latest = get_current_proposals([base], messages)["A"]
 
-    assert latest is not None
     assert latest.summary == "summary v2"
     assert latest.analysis == base.analysis
     assert latest.recommendations == ["rec-2"]
@@ -103,3 +101,51 @@ def test_exec_parses_revision_without_live_llm():
     assert message.proposal_revision.summary == "narrowed summary"
     assert message.proposal_revision.analysis is None
     assert message.proposal_revision.recommendations is None
+
+
+def test_prep_compacts_prompt_context_without_mutating_debate_messages():
+    node = DebateNode()
+    debate_messages = [
+        DebateMessage(
+            agent="A",
+            turn=turn,
+            action=DebateAction.CONCERN,
+            reasoning=f"raw reasoning {turn}",
+            concern=f"raw concern {turn}",
+        )
+        for turn in range(1, 12)
+    ]
+    shared = {
+        "personas": [_persona("A")],
+        "proposals": [
+            Proposal(
+                agent="A",
+                summary="initial summary",
+                analysis=[AnalysisPoint(point="initial point", reasoning="because")],
+                recommendations=["initial rec"],
+            )
+        ],
+        "debate_messages": list(debate_messages),
+        "current_turn": 11,
+        "prompt": "question",
+        "config": {
+            "show_stream": False,
+            "context_compaction_enabled": True,
+            "compact_after_turns": 8,
+            "recent_turns_to_keep": 3,
+        },
+    }
+
+    prep_res = node.prep(shared)[0]
+    prompt_context = prep_res["proposals_context"]
+
+    assert shared["debate_messages"] == debate_messages
+    assert shared["compacted_context"]["through_turn"] == 8
+    assert "## Initial Proposals" in prompt_context
+    assert "## Current Proposals" in prompt_context
+    assert "## Older Debate Summary By Agent" in prompt_context
+    assert "## Recent Debate" in prompt_context
+    assert "**A** (Turn 8)" not in prompt_context
+    assert "Turn 8: concern" in prompt_context
+    assert "**A** (Turn 9)" in prompt_context
+    assert "**A** (Turn 11)" in prompt_context

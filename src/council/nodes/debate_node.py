@@ -8,6 +8,11 @@ from council.console import (
     print_special_event,
     print_warning,
 )
+from council.context import (
+    get_current_proposals,
+    split_debate_messages_for_compaction,
+    summarize_debate_messages_by_agent,
+)
 from council.models import (
     AnalysisPoint,
     DebateAction,
@@ -17,6 +22,11 @@ from council.models import (
     ProposalRevision,
 )
 from council.utils import call_llm, parse_json_response
+
+
+CONTEXT_COMPACTION_ENABLED = True
+COMPACT_AFTER_TURNS = 8
+RECENT_TURNS_TO_KEEP = 3
 
 
 class DebateNode(BatchNode):
@@ -39,9 +49,24 @@ class DebateNode(BatchNode):
         proposals = shared["proposals"]
         debate_messages = shared.get("debate_messages", [])
         current_turn = shared.get("current_turn", 0) + 1
+        current_proposals = get_current_proposals(proposals, debate_messages)
+        config = shared["config"]
+        compacted_context = self._prepare_compacted_context(
+            shared, debate_messages, current_turn
+        )
+        prompt_messages = (
+            compacted_context["recent_messages"]
+            if compacted_context is not None
+            else debate_messages
+        )
 
-        # Format all current proposals for context
-        proposals_context = self._format_proposals(proposals, debate_messages)
+        # Format discussion context for the prompt without mutating the transcript.
+        proposals_context = self._format_discussion_context(
+            proposals,
+            current_proposals,
+            compacted_context,
+            prompt_messages,
+        )
 
         # Create input for each persona
         inputs = []
@@ -52,85 +77,99 @@ class DebateNode(BatchNode):
                     "proposals_context": proposals_context,
                     "current_turn": current_turn,
                     "prompt": shared["prompt"],
-                    "show_stream": shared["config"]["show_stream"],
-                    "own_proposal": self._get_latest_proposal(
-                        persona.name, proposals, debate_messages
-                    ),
+                    "show_stream": config["show_stream"],
+                    "own_proposal": current_proposals.get(persona.name),
                 }
             )
 
         return inputs
 
-    def _format_proposals(
-        self, proposals: list[Proposal], debate_messages: list[DebateMessage]
+    def _prepare_compacted_context(
+        self,
+        shared: dict,
+        debate_messages: list[DebateMessage],
+        current_turn: int,
+    ) -> dict | None:
+        """Derive compacted prompt context while preserving full messages."""
+        config = shared["config"]
+        if not config.get("context_compaction_enabled", CONTEXT_COMPACTION_ENABLED):
+            return None
+
+        compact_after_turns = config.get("compact_after_turns", COMPACT_AFTER_TURNS)
+        if current_turn <= compact_after_turns:
+            return None
+
+        recent_turns_to_keep = config.get(
+            "recent_turns_to_keep", RECENT_TURNS_TO_KEEP
+        )
+        compacted_messages, recent_messages, through_turn = (
+            split_debate_messages_for_compaction(
+                debate_messages, current_turn, recent_turns_to_keep
+            )
+        )
+        if through_turn is None:
+            return None
+
+        compacted_context = {
+            "through_turn": through_turn,
+            "recent_turns_to_keep": recent_turns_to_keep,
+            "summary_by_agent": summarize_debate_messages_by_agent(
+                compacted_messages
+            ),
+            "recent_messages": recent_messages,
+        }
+        shared["compacted_context"] = {
+            key: value
+            for key, value in compacted_context.items()
+            if key != "recent_messages"
+        }
+        return compacted_context
+
+    def _format_discussion_context(
+        self,
+        initial_proposals: list[Proposal],
+        current_proposals: dict[str, Proposal],
+        compacted_context: dict | None,
+        debate_messages: list[DebateMessage],
     ) -> str:
-        """Format current proposals and debate history for context."""
-        lines = ["## Current Proposals\n"]
+        """Format proposals and debate context for the debate prompt."""
+        lines = ["## Initial Proposals\n"]
 
-        # Get latest proposal for each agent
-        latest = {}
-        for p in proposals:
-            latest[p.agent] = p
-
-        for msg in debate_messages:
-            if msg.action == DebateAction.REVISE and msg.proposal_revision:
-                prior = latest.get(msg.agent)
-                if prior:
-                    latest[msg.agent] = self._apply_revision(
-                        prior, msg.proposal_revision
-                    )
-
-        for agent, proposal in latest.items():
+        for proposal in initial_proposals:
             lines.append(proposal.to_markdown())
             lines.append("")
 
-        # Add debate history if any
+        lines.append("\n## Current Proposals\n")
+
+        for proposal in current_proposals.values():
+            lines.append(proposal.to_markdown())
+            lines.append("")
+
+        if compacted_context is not None:
+            lines.append("\n## Older Debate Summary By Agent\n")
+            lines.append(
+                "Compacted completed debate turns through "
+                f"turn {compacted_context['through_turn']}."
+            )
+            lines.append("")
+            for agent, summaries in compacted_context[
+                "summary_by_agent"
+            ].items():
+                lines.append(f"### {agent}")
+                for summary in summaries:
+                    lines.append(f"- {summary}")
+                lines.append("")
+
         if debate_messages:
-            lines.append("\n## Debate History\n")
+            heading = (
+                "Recent Debate" if compacted_context is not None else "Debate History"
+            )
+            lines.append(f"\n## {heading}\n")
             for msg in debate_messages:
                 lines.append(msg.to_markdown())
                 lines.append("")
 
         return "\n".join(lines)
-
-    def _get_latest_proposal(
-        self,
-        agent_name: str,
-        proposals: list[Proposal],
-        debate_messages: list[DebateMessage],
-    ) -> Proposal | None:
-        """Get the most recent proposal for an agent."""
-        latest = None
-        for p in proposals:
-            if p.agent == agent_name:
-                latest = p
-
-        for msg in debate_messages:
-            if (
-                msg.agent == agent_name
-                and msg.action == DebateAction.REVISE
-                and msg.proposal_revision
-            ):
-                if latest:
-                    latest = self._apply_revision(latest, msg.proposal_revision)
-
-        return latest
-
-    def _apply_revision(
-        self, base: Proposal, revision: ProposalRevision
-    ) -> Proposal:
-        """Apply a partial proposal revision to a base proposal."""
-        return Proposal(
-            agent=base.agent,
-            summary=revision.summary if revision.summary is not None else base.summary,
-            analysis=revision.analysis if revision.analysis is not None else base.analysis,
-            recommendations=(
-                revision.recommendations
-                if revision.recommendations is not None
-                else base.recommendations
-            ),
-            turn=base.turn,
-        )
 
     def exec(self, prep_res):
         """Generate debate response for a single agent."""
@@ -181,6 +220,11 @@ Notes:
 - target: Required only if action is "agree" - which agent you agree with
 - concern: Required only if action is "concern"
 - proposal_revision: Required only if action is "revise". Include ONLY fields you changed.
+- Revision semantics:
+  - Included summary replaces the prior summary.
+  - Included analysis replaces the full prior analysis list.
+  - Included recommendations replaces the full prior recommendations list.
+  - Omitted fields remain unchanged.
 
 Be constructive. The goal is to reach consensus, not to win."""
 

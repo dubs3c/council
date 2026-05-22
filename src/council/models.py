@@ -32,11 +32,15 @@ class ProviderConfig:
         api_key: API key or env var reference (e.g., "$OPENAI_API_KEY")
         base_url: Base URL for OpenAI-compatible API
         model: Model identifier (e.g., "gpt-4o", "claude-3-opus-20240229")
+        prompt_cache: Whether prompt caching is enabled when safely supported
+        prompt_cache_strategy: Provider-safe prompt cache strategy
     """
 
     api_key: str = "$OPENAI_API_KEY"
     base_url: str = "https://api.openai.com/v1"
     model: str = "gpt-4o"
+    prompt_cache: bool = False
+    prompt_cache_strategy: str = "none"
 
     def get_api_key(self) -> str:
         """Resolve API key, supporting environment variable references."""
@@ -173,6 +177,20 @@ class DebateMessage:
 
 
 @dataclass
+class AgentDiscussionSummary:
+    """Structured summary of one agent's discussion history."""
+
+    agent: str
+    initial_position: str
+    revision_history: List[str]
+    current_position: str
+    concerns_raised: List[str]
+    agreements: List[str]
+    unresolved_concerns: List[str]
+    final_stance: str
+
+
+@dataclass
 class ConsensusPoint:
     """A point of consensus with supporters."""
 
@@ -288,16 +306,9 @@ class DiscussionState:
 
     def get_current_proposals(self) -> dict:
         """Get the most recent proposal from each agent."""
-        latest = {}
-        for proposal in self.proposals:
-            latest[proposal.agent] = proposal
+        from council.context import get_current_proposals
 
-        # Update with revisions from debate
-        for msg in self.debate_messages:
-            if msg.action == DebateAction.REVISE and msg.updated_proposal:
-                latest[msg.agent] = msg.updated_proposal
-
-        return latest
+        return get_current_proposals(self.proposals, self.debate_messages)
 
     def get_agreements(self) -> dict:
         """Get which agents agree with which proposals."""
